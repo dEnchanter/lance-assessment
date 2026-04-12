@@ -11,7 +11,7 @@ export function validate(schema: ZodSchema) {
         res.status(400).json({
           error: {
             code: "INVALID_INPUT",
-            message: err.errors.map((e) => e.message).join(", "),
+            message: err.issues.map((e: any) => e.message).join(", "),
           },
         });
         return;
