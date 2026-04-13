@@ -79,51 +79,107 @@ I considered a monorepo, separate repos, and a Next.js monolith (using API route
 
 ### Prerequisites
 
-- Node.js 18+
-- Docker and Docker Compose
+- [Node.js 18+](https://nodejs.org/)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) — recommended, or a local Postgres 14+ instance (see below)
+
+### Option A — Docker (recommended)
+
+No Postgres installation needed. Docker handles everything.
 
 ### Steps
 
-1. Clone the repo:
-   ```bash
-   git clone <repo-url>
-   cd lance-assessment
-   ```
+**1. Clone the repo**
+```bash
+git clone <repo-url>
+cd lance-assessment
+```
 
-2. Start Postgres:
-   ```bash
-   docker-compose up -d
-   ```
+**2. Start the database**
+```bash
+docker compose up -d
+```
+This spins up a PostgreSQL 16 container on port **5555** (not 5432, to avoid conflicts with any local Postgres instance you might have).
 
-3. Set up the backend:
-   ```bash
-   cd backend
-   cp .env.example .env
-   npm install
-   npm run migrate
-   npm run dev
-   ```
+**3. Configure and start the backend**
 
-4. Set up the frontend (new terminal):
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
+Open a terminal in the `backend/` directory:
+```bash
+cd backend
+cp .env.example .env   # default values work out of the box with Docker
+npm install
+npm run migrate        # creates tables and enums
+npm run dev            # starts Express on http://localhost:3001
+```
 
-5. Open http://localhost:3000 in your browser.
+**4. Start the frontend**
 
-### Testing the flow
+Open a second terminal in the `frontend/` directory:
+```bash
+cd frontend
+npm install
+npm run dev            # starts Next.js on http://localhost:3000
+```
 
-1. Register a user (this creates their wallet)
-2. Deposit some funds
-3. Open an incognito window, register a second user
-4. Transfer funds from the first user to the second
-5. Check both balances and transaction histories
+**5. Open http://localhost:3000**
+
+---
+
+### Option B — Local Postgres (no Docker)
+
+If you already have Postgres installed and prefer not to use Docker:
+
+**1. Create the database and user** (run as your Postgres superuser):
+```sql
+psql -U postgres
+CREATE USER wallet_user WITH PASSWORD 'wallet_pass';
+CREATE DATABASE wallet_db OWNER wallet_user;
+\q
+```
+
+**2. Update `backend/.env`** to point at your local instance (default port is 5432):
+```bash
+DATABASE_URL=postgresql://wallet_user:wallet_pass@localhost:5432/wallet_db
+JWT_SECRET=change-this-to-a-long-random-secret
+PORT=3001
+```
+
+**3. Run the rest of the setup as normal** — skip `docker compose up -d` and follow steps 3–5 from Option A above.
+
+> **Note:** If you hit a Postgres auth error (`password authentication failed`), your local Postgres may be using `peer` or `ident` auth. Edit `pg_hba.conf` to use `md5` for local connections, or create the user without a password and remove the password from the `DATABASE_URL`.
+
+---
+
+### Testing the flow manually
+
+The easiest way to test transfers is to have two accounts:
+
+1. Register a user at http://localhost:3000/auth/register — deposit some funds
+2. Open an **incognito window**, register a second user
+3. In the first window, go to Transfer and send funds to the second user
+4. Check both dashboards and transaction histories to confirm
+
+### Running the test suite
+
+The integration tests use a real database (not mocks), so Postgres must be running — either via Docker or locally:
+
+```bash
+cd backend
+npm test               # all 53 tests
+npm run test:unit      # decimal arithmetic only (no DB needed)
+npm run test:integration  # wallet service + API routes
+```
+
+### Ports at a glance
+
+| Service    | URL                        |
+|------------|----------------------------|
+| Frontend   | http://localhost:3000      |
+| Backend    | http://localhost:3001      |
+| PostgreSQL | localhost:5555             |
 
 ## Scaling to 10 million transactions per day
 
-10 million transactions per day works out to roughly 115 per second sustained, with spikes well above that. The current design — single Postgres instance, synchronous request handling — would start to struggle around that level. Here's what I'd change.
+10 million transactions per day works out to roughly 115 per second sustained (10,000,000 ÷ 86,400 seconds in a day ≈ 115.74 TPS). That's the average assuming uniform traffic — in practice, peak hours could push 3–5× higher (350–575 TPS) since transaction volume clusters around mornings and evenings. The current design — single Postgres instance, synchronous request handling — would start to struggle around that level. Here's what I'd change.
 
 **Database.** Add read replicas for balance and transaction history queries. Partition the `ledger_entries` table by month so queries over recent data don't scan the full history. Put PgBouncer in front for connection pooling. Add composite indexes on `(wallet_id, created_at)` for the transaction history endpoint.
 
